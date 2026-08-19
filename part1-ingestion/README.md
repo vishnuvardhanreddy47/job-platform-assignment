@@ -1,69 +1,53 @@
 # Job Ingestion Service
 
-A beginner-friendly FastAPI service that reads job listings from an authorized public RSS/API source, validates and normalizes them, and stores them in memory. The default source is a controlled local mock RSS feed, so the demo works without scraping or depending on a third-party site.
+A small FastAPI ingestion service that reads job listings from an authorized public job API/RSS source, validates and normalizes them, and stores them in memory.
+
+## Source
+
+The demo defaults to the public **Arbeitnow Job Board API**:
+
+`https://www.arbeitnow.com/api/job-board-api`
+
+Arbeitnow documents this API as a free job search API that requires no API key. The service can also be pointed at another authorized RSS/API source with `JOB_FEED_URL`.
+
+If the configured source fails, the service falls back to a controlled local RSS fixture. The response explicitly reports `used_fallback: true`, so fallback data is never presented as live source data.
 
 ## Architecture
 
-`POST /ingest` calls `ingestion/fetcher.py` for an authorized HTTP feed, parses RSS in `parser.py`, normalizes and validates records in `normalizer.py` and `models.py`, then deduplicates them in `storage.py`. A failed or empty initial source falls back to the local mock feed. Existing jobs are preserved when a previously populated source suddenly returns zero jobs.
+`POST /ingest` fetches the configured source with timeout, retries, exponential backoff, and pacing. The payload is parsed by the source adapter, normalized and validated by `normalizer.py` and `models.py`, then deduplicated by URL in `storage.py`.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the detailed design and Mermaid diagram.
+See `docs/ARCHITECTURE.md` and `DECISIONS.md`.
 
-## Installation
-
-Use Python 3.11 or newer:
+## Local setup
 
 ```powershell
+cd part1-ingestion
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-```
-
-## Local Setup
-
-The service defaults to `mock://local/jobs`. To use a real source, set `JOB_FEED_URL` to an RSS URL that you are authorized to access and that permits automated requests:
-
-```powershell
-$env:JOB_FEED_URL = "https://your-authorized-source.example/jobs.xml"
-```
-
-Do not use this project to scrape LinkedIn, Indeed, Naukri, Wellfound, or any protected website. Do not bypass authentication, CAPTCHA, bot detection, robots restrictions, rate limits, or IP bans.
-
-## Running the API
-
-```powershell
 uvicorn app:app --reload
 ```
 
-Open `http://127.0.0.1:8000/docs` for interactive OpenAPI documentation.
+Open `http://127.0.0.1:8000/docs`.
 
-## Testing
-
-```powershell
-pytest -q
-```
-
-Tests cover RSS parsing, normalization, URL-based deduplication, and fallback behavior.
-
-## API Endpoints
-
-- `GET /` returns service status.
-- `GET /health` returns health and the current in-memory job count.
-- `GET /jobs` returns normalized jobs.
-- `POST /ingest` fetches, parses, validates, deduplicates, and stores jobs.
-
-Example:
+## Verify
 
 ```powershell
+python -m pytest
 Invoke-RestMethod -Method Post http://127.0.0.1:8000/ingest
 Invoke-RestMethod http://127.0.0.1:8000/jobs
+Invoke-RestMethod -Method Post http://127.0.0.1:8000/ingest
 ```
 
-## Deployment on Render
+The second ingestion should normally add `0` new jobs because the store deduplicates by normalized URL.
 
-`render.yaml` contains a minimal Render web-service definition. Connect the repository in Render, or create a Python web service with:
+## Deployment
 
-- Build command: `pip install -r requirements.txt`
-- Start command: `uvicorn app:app --host 0.0.0.0 --port $PORT`
-- Optional environment variable: `JOB_FEED_URL`
+The included `render.yaml` is configured for a Render Python web service with:
 
-This version uses in-memory storage, so jobs reset when the service restarts. A production version would add a durable database after the source contract and retention policy are known.
+- Root directory: `part1-ingestion`
+- Build: `pip install -r requirements.txt`
+- Start: `uvicorn app:app --host 0.0.0.0 --port $PORT`
+- `JOB_FEED_URL`: Arbeitnow public API
+
+The service uses in-memory storage, so data resets after a restart. A production version would add durable storage and source-specific observability.
